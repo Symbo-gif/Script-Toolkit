@@ -122,9 +122,7 @@ def md_h2(title: str) -> str:
 def md_codeblock(code: str, lang: str = "") -> str:
     if lang:
         return f"```{lang}\n{code}\n```\n\n"
-    return f"```
-{code}
-```\n\n"
+    return f"```\n{code}\n```\n\n"
 
 
 def estimate_tokens(text: str) -> int:
