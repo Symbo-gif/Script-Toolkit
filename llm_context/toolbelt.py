@@ -2035,6 +2035,759 @@ def cmd_readme_links(path: str) -> str:
 
 
 # ----------------------------
+# NEW PRODUCTION-READY SCRIPTS
+# ----------------------------
+
+
+def cmd_api_response_validator(path: str) -> str:
+    """Validates API response formats in JSON files."""
+    out = [md_h1("API Response Validator")]
+    issues = []
+    for fp, rel in iter_files(path, include_exts={".json"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                # Check for common API response patterns
+                if "error" in data and "message" not in data:
+                    issues.append(f"{rel}: error field without message")
+                if "data" in data and not isinstance(data["data"], (dict, list)):
+                    issues.append(f"{rel}: data field is not dict or list")
+                if "status" in data and not isinstance(data["status"], (int, str)):
+                    issues.append(f"{rel}: status field has invalid type")
+        except json.JSONDecodeError as e:
+            issues.append(f"{rel}: JSON decode error - {e}")
+    
+    if issues:
+        out.append(md_h2("Validation Issues"))
+        for issue in issues:
+            out.append(f"- {issue}\n")
+    else:
+        out.append("No API response validation issues found.\n")
+    return "".join(out)
+
+
+def cmd_config_validator(path: str) -> str:
+    """Validates configuration files for common issues."""
+    out = [md_h1("Configuration File Validator")]
+    issues = []
+    
+    # Check JSON configs
+    for fp, rel in iter_files(path, include_exts={".json"}):
+        if "node_modules" in fp or "dist" in fp:
+            continue
+        text = read_text_safe(fp)
+        if text:
+            try:
+                json.loads(text)
+            except json.JSONDecodeError as e:
+                issues.append(f"{rel}: Invalid JSON - {str(e)[:50]}")
+    
+    # Check YAML configs
+    for fp, rel in iter_files(path, include_exts={".yml", ".yaml"}):
+        text = read_text_safe(fp)
+        if text:
+            if "\t" in text:
+                issues.append(f"{rel}: Contains tabs (YAML requires spaces)")
+            # Check for common YAML mistakes
+            if re.search(r"^\s*-\s*$", text, re.MULTILINE):
+                issues.append(f"{rel}: Empty list items")
+    
+    if issues:
+        out.append(md_h2("Validation Issues"))
+        for issue in issues:
+            out.append(f"- {issue}\n")
+    else:
+        out.append("No configuration validation issues found.\n")
+    return "".join(out)
+
+
+def cmd_dependency_tree_analyzer(path: str) -> str:
+    """Analyzes dependency trees in package.json and requirements.txt."""
+    out = [md_h1("Dependency Tree Analyzer")]
+    
+    # Python dependencies
+    req_path = os.path.join(path, "requirements.txt")
+    if os.path.exists(req_path):
+        text = read_text_safe(req_path)
+        if text:
+            out.append(md_h2("Python Dependencies"))
+            lines = [l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")]
+            deps = {}
+            for line in lines:
+                if "==" in line:
+                    name, version = line.split("==", 1)
+                    deps[name.strip()] = version.strip()
+                elif line:
+                    deps[line] = "unspecified"
+            
+            out.append(f"Total: {len(deps)} dependencies\n\n")
+            for name, ver in sorted(deps.items()):
+                out.append(f"- {name}: {ver}\n")
+    
+    # Node dependencies
+    pkg_path = os.path.join(path, "package.json")
+    if os.path.exists(pkg_path):
+        text = read_text_safe(pkg_path)
+        if text:
+            try:
+                data = json.loads(text)
+                deps = data.get("dependencies", {})
+                dev_deps = data.get("devDependencies", {})
+                
+                out.append(md_h2("Node.js Dependencies"))
+                out.append(f"Production: {len(deps)}, Development: {len(dev_deps)}\n\n")
+                
+                if deps:
+                    out.append(md_h3("Production"))
+                    for name, ver in sorted(deps.items()):
+                        out.append(f"- {name}: {ver}\n")
+                
+                if dev_deps:
+                    out.append(md_h3("Development"))
+                    for name, ver in sorted(dev_deps.items()):
+                        out.append(f"- {name}: {ver}\n")
+            except json.JSONDecodeError:
+                pass
+    
+    if len(out) == 1:
+        out.append("No dependency files found (requirements.txt or package.json).\n")
+    
+    return "".join(out)
+
+
+def cmd_git_commit_linter(path: str) -> str:
+    """Analyzes git commit messages for conventional commit compliance."""
+    out = [md_h1("Git Commit Message Linter")]
+    
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-n", "50"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            out.append("Not a git repository or git not available.\n")
+            return "".join(out)
+        
+        lines = result.stdout.strip().splitlines()
+        issues = []
+        conventional_types = {"feat", "fix", "docs", "style", "refactor", "test", "chore", "perf", "ci", "build"}
+        
+        for line in lines:
+            if " " not in line:
+                continue
+            sha, msg = line.split(" ", 1)
+            msg = msg.strip()
+            
+            # Check for conventional commit format
+            if ":" in msg:
+                type_part = msg.split(":")[0].split("(")[0].strip()
+                if type_part.lower() not in conventional_types:
+                    issues.append(f"{sha}: Non-conventional type '{type_part}' in '{msg[:50]}'")
+            else:
+                # No type at all
+                if len(msg) > 10 and not msg.startswith("Merge"):
+                    issues.append(f"{sha}: No conventional commit type in '{msg[:50]}'")
+            
+            # Check length
+            if len(msg) > 72:
+                issues.append(f"{sha}: Subject line too long ({len(msg)} chars)")
+        
+        out.append(f"Analyzed {len(lines)} commits\n\n")
+        
+        if issues:
+            out.append(md_h2("Issues Found"))
+            for issue in issues[:20]:  # Limit output
+                out.append(f"- {issue}\n")
+        else:
+            out.append("All commits follow conventional commit format!\n")
+            
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        out.append(f"Error analyzing git history: {e}\n")
+    
+    return "".join(out)
+
+
+def cmd_code_complexity_calculator(path: str) -> str:
+    """Calculates code complexity metrics."""
+    out = [md_h1("Code Complexity Calculator")]
+    
+    complexities = []
+    for fp, rel in iter_files(path, include_exts={".py"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        try:
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # Simple complexity: count decision points
+                    complexity = 1  # Base complexity
+                    for child in ast.walk(node):
+                        if isinstance(child, (ast.If, ast.While, ast.For, ast.And, ast.Or, 
+                                              ast.ExceptHandler, ast.With)):
+                            complexity += 1
+                    
+                    start = getattr(node, 'lineno', 0)
+                    complexities.append((rel, node.name, complexity, start))
+        except Exception:
+            pass
+    
+    if complexities:
+        # Sort by complexity descending
+        complexities.sort(key=lambda x: x[2], reverse=True)
+        
+        out.append(md_h2("High Complexity Functions (>10)"))
+        high = [c for c in complexities if c[2] > 10]
+        if high:
+            for rel, name, comp, line in high[:30]:
+                out.append(f"- {rel}:{line} `{name}()` - Complexity: {comp}\n")
+        else:
+            out.append("No high-complexity functions found.\n")
+        
+        out.append("\n")
+        out.append(md_h2("All Functions (Top 20)"))
+        for rel, name, comp, line in complexities[:20]:
+            out.append(f"- {rel}:{line} `{name}()` - Complexity: {comp}\n")
+        
+        avg_complexity = sum(c[2] for c in complexities) / len(complexities)
+        out.append(f"\nAverage Complexity: {avg_complexity:.2f}\n")
+    else:
+        out.append("No Python functions found.\n")
+    
+    return "".join(out)
+
+
+def cmd_performance_profiler_report(path: str) -> str:
+    """Generates performance analysis report."""
+    out = [md_h1("Performance Profiler Report")]
+    
+    concerns = []
+    
+    # Look for performance anti-patterns
+    for fp, rel in iter_files(path, include_exts={".py", ".js", ".ts", ".java"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        lines = text.splitlines()
+        for i, line in enumerate(lines, 1):
+            lower = line.lower()
+            # Nested loops
+            if any(x in lower for x in ["for", "while"]):
+                indent = len(line) - len(line.lstrip())
+                if indent > 8:  # Deeply nested
+                    concerns.append(f"{rel}:{i} Deeply nested loop (indent {indent})")
+            
+            # Database queries in loops
+            if any(db in lower for db in ["select ", "query(", ".find(", ".filter("]):
+                if any(loop in lines[max(0, i-5):i] for loop in ["for ", "while "]):
+                    concerns.append(f"{rel}:{i} Potential N+1 query pattern")
+            
+            # Large data operations
+            if any(op in lower for op in [".sort(", ".reverse(", "sorted("]):
+                if any(big in text[max(0, text.find(line)-200):text.find(line)] 
+                       for big in ["readFile", "getAllUsers", "fetchAll"]):
+                    concerns.append(f"{rel}:{i} Large data operation without pagination")
+    
+    if concerns:
+        out.append(md_h2("Performance Concerns"))
+        for concern in concerns[:50]:
+            out.append(f"- {concern}\n")
+    else:
+        out.append("No obvious performance concerns detected.\n")
+    
+    return "".join(out)
+
+
+def cmd_test_coverage_analyzer(path: str) -> str:
+    """Analyzes test coverage patterns."""
+    out = [md_h1("Test Coverage Analyzer")]
+    
+    test_files = []
+    source_files = []
+    
+    for fp, rel in iter_files(path):
+        ext = os.path.splitext(fp)[1].lower()
+        if ext not in TEXT_EXTS:
+            continue
+        
+        lower_rel = rel.lower()
+        if any(x in lower_rel for x in ["test", "spec", "__test__", ".test.", ".spec."]):
+            test_files.append(rel)
+        elif ext in {".py", ".js", ".ts", ".java", ".go", ".rb", ".rs"}:
+            if "test" not in lower_rel:
+                source_files.append(rel)
+    
+    out.append(f"Source files: {len(source_files)}\n")
+    out.append(f"Test files: {len(test_files)}\n")
+    
+    if source_files:
+        ratio = len(test_files) / len(source_files) * 100
+        out.append(f"Test-to-source ratio: {ratio:.1f}%\n\n")
+        
+        if ratio < 30:
+            out.append("⚠️ Low test coverage - consider adding more tests\n")
+        elif ratio > 100:
+            out.append("✓ Excellent test coverage\n")
+        else:
+            out.append("✓ Reasonable test coverage\n")
+    
+    out.append("\n")
+    out.append(md_h2("Test Files"))
+    for tf in sorted(test_files)[:30]:
+        out.append(f"- {tf}\n")
+    
+    return "".join(out)
+
+
+def cmd_dockerfile_analyzer(path: str) -> str:
+    """Analyzes Dockerfile for best practices."""
+    out = [md_h1("Dockerfile Analyzer")]
+    
+    dockerfiles = []
+    for name in ["Dockerfile", "Dockerfile.prod", "Dockerfile.dev"]:
+        fp = os.path.join(path, name)
+        if os.path.exists(fp):
+            dockerfiles.append((name, fp))
+    
+    if not dockerfiles:
+        out.append("No Dockerfile found.\n")
+        return "".join(out)
+    
+    for name, fp in dockerfiles:
+        out.append(md_h2(name))
+        text = read_text_safe(fp)
+        if not text:
+            out.append("Could not read file.\n")
+            continue
+        
+        issues = []
+        best_practices = []
+        lines = text.splitlines()
+        
+        # Check for best practices
+        has_user = any("USER " in line.upper() for line in lines)
+        has_healthcheck = any("HEALTHCHECK" in line.upper() for line in lines)
+        has_multistage = text.count("FROM ") > 1
+        
+        if not has_user:
+            issues.append("No USER directive (running as root)")
+        else:
+            best_practices.append("Uses non-root user ✓")
+        
+        if not has_healthcheck:
+            issues.append("No HEALTHCHECK directive")
+        else:
+            best_practices.append("Has healthcheck ✓")
+        
+        if has_multistage:
+            best_practices.append("Uses multi-stage build ✓")
+        
+        # Check for common issues
+        for i, line in enumerate(lines, 1):
+            upper = line.upper().strip()
+            if upper.startswith("RUN APT-GET") and "apt-get update" in upper and "apt-get install" in upper:
+                if "&&" not in line:
+                    issues.append(f"Line {i}: Separate apt-get update and install")
+            
+            if "ADD " in upper and "http" in line.lower():
+                issues.append(f"Line {i}: Use COPY instead of ADD for local files")
+            
+            if "COPY . ." in line or "ADD . ." in line:
+                issues.append(f"Line {i}: Copying entire context may include unnecessary files")
+        
+        if best_practices:
+            out.append("\nBest Practices:\n")
+            for bp in best_practices:
+                out.append(f"- {bp}\n")
+        
+        if issues:
+            out.append("\nIssues:\n")
+            for issue in issues:
+                out.append(f"- {issue}\n")
+        
+        out.append("\n")
+    
+    return "".join(out)
+
+
+def cmd_env_validator(path: str) -> str:
+    """Validates environment variable usage and .env files."""
+    out = [md_h1("Environment Variable Validator")]
+    
+    # Find .env files
+    env_files = []
+    for name in [".env", ".env.example", ".env.template", ".env.sample"]:
+        fp = os.path.join(path, name)
+        if os.path.exists(fp):
+            env_files.append((name, fp))
+    
+    # Find env var usage in code
+    env_vars_used = set()
+    for fp, rel in iter_files(path, include_exts={".py", ".js", ".ts", ".sh"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        # Python: os.environ, os.getenv
+        env_vars_used.update(re.findall(r'os\.environ\[[\"\']([A-Z_][A-Z0-9_]*)[\"\']', text))
+        env_vars_used.update(re.findall(r'os\.getenv\([\"\']([A-Z_][A-Z0-9_]*)[\"\']', text))
+        # JavaScript/TypeScript: process.env
+        env_vars_used.update(re.findall(r'process\.env\.([A-Z_][A-Z0-9_]*)', text))
+        # Shell: $VAR
+        env_vars_used.update(re.findall(r'\$([A-Z_][A-Z0-9_]*)', text))
+    
+    # Parse .env files
+    env_vars_defined = set()
+    for name, fp in env_files:
+        text = read_text_safe(fp)
+        if text:
+            for line in text.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    var_name = line.split("=")[0].strip()
+                    env_vars_defined.add(var_name)
+    
+    out.append(f"Environment variables used in code: {len(env_vars_used)}\n")
+    out.append(f"Environment variables defined in .env: {len(env_vars_defined)}\n\n")
+    
+    # Find undefined vars
+    undefined = env_vars_used - env_vars_defined
+    if undefined and env_files:
+        out.append(md_h2("Used but Not Defined in .env"))
+        for var in sorted(undefined):
+            out.append(f"- {var}\n")
+        out.append("\n")
+    
+    # Find unused vars
+    unused = env_vars_defined - env_vars_used
+    if unused:
+        out.append(md_h2("Defined but Not Used"))
+        for var in sorted(unused):
+            out.append(f"- {var}\n")
+    
+    if not env_files:
+        out.append("⚠️ No .env files found\n")
+    
+    return "".join(out)
+
+
+def cmd_api_endpoint_inventory(path: str) -> str:
+    """Inventories API endpoints in the codebase."""
+    out = [md_h1("API Endpoint Inventory")]
+    
+    endpoints = []
+    
+    for fp, rel in iter_files(path, include_exts={".py", ".js", ".ts", ".java", ".go", ".rb"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        lines = text.splitlines()
+        for i, line in enumerate(lines, 1):
+            # Flask/FastAPI routes
+            if re.search(r'@app\.(get|post|put|delete|patch)\(["\']([^"\']+)', line):
+                match = re.search(r'@app\.(get|post|put|delete|patch)\(["\']([^"\']+)', line)
+                if match:
+                    method, route = match.groups()
+                    endpoints.append((rel, i, method.upper(), route))
+            
+            # Express.js routes
+            if re.search(r'app\.(get|post|put|delete|patch)\(["\']([^"\']+)', line):
+                match = re.search(r'app\.(get|post|put|delete|patch)\(["\']([^"\']+)', line)
+                if match:
+                    method, route = match.groups()
+                    endpoints.append((rel, i, method.upper(), route))
+            
+            # Spring Boot
+            if re.search(r'@(Get|Post|Put|Delete|Patch)Mapping\(["\']([^"\']+)', line):
+                match = re.search(r'@(Get|Post|Put|Delete|Patch)Mapping\(["\']([^"\']+)', line)
+                if match:
+                    method, route = match.groups()
+                    endpoints.append((rel, i, method.upper(), route))
+    
+    if endpoints:
+        # Group by method
+        by_method = defaultdict(list)
+        for rel, line, method, route in endpoints:
+            by_method[method].append((route, rel, line))
+        
+        out.append(f"Total endpoints: {len(endpoints)}\n\n")
+        
+        for method in ["GET", "POST", "PUT", "PATCH", "DELETE"]:
+            if method in by_method:
+                out.append(md_h2(f"{method} Endpoints"))
+                for route, rel, line in sorted(by_method[method]):
+                    out.append(f"- `{route}` - {rel}:{line}\n")
+                out.append("\n")
+    else:
+        out.append("No API endpoints found.\n")
+    
+    return "".join(out)
+
+
+def cmd_database_schema_analyzer(path: str) -> str:
+    """Analyzes database schema definitions."""
+    out = [md_h1("Database Schema Analyzer")]
+    
+    tables = []
+    migrations = []
+    
+    # Look for SQL files
+    for fp, rel in iter_files(path, include_exts={".sql"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        if "migration" in rel.lower() or "migrate" in rel.lower():
+            migrations.append(rel)
+        
+        # Find CREATE TABLE statements
+        for match in re.finditer(r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)', 
+                                text, re.IGNORECASE):
+            table_name = match.group(1)
+            tables.append((table_name, rel))
+    
+    # Look for ORM models
+    for fp, rel in iter_files(path, include_exts={".py"}):
+        text = read_text_safe(fp)
+        if not text or "models" not in rel.lower():
+            continue
+        
+        # SQLAlchemy models
+        for match in re.finditer(r'class\s+([A-Z][a-zA-Z0-9]*)\([^)]*Model[^)]*\)', text):
+            tables.append((match.group(1), rel))
+        
+        # Django models
+        for match in re.finditer(r'class\s+([A-Z][a-zA-Z0-9]*)\([^)]*models\.Model[^)]*\)', text):
+            tables.append((match.group(1), rel))
+    
+    out.append(f"Tables/Models found: {len(tables)}\n")
+    out.append(f"Migration files: {len(migrations)}\n\n")
+    
+    if tables:
+        out.append(md_h2("Tables/Models"))
+        for table, location in sorted(tables):
+            out.append(f"- `{table}` - {location}\n")
+        out.append("\n")
+    
+    if migrations:
+        out.append(md_h2("Migration Files"))
+        for mig in sorted(migrations):
+            out.append(f"- {mig}\n")
+    
+    if not tables and not migrations:
+        out.append("No database schema files found.\n")
+    
+    return "".join(out)
+
+
+def cmd_log_analyzer(path: str) -> str:
+    """Analyzes log files and logging patterns."""
+    out = [md_h1("Log File Analyzer")]
+    
+    log_files = []
+    log_calls = []
+    
+    # Find log files
+    for fp, rel in iter_files(path):
+        if any(ext in rel.lower() for ext in [".log", "log.txt", "logs/"]):
+            size = os.path.getsize(fp)
+            log_files.append((rel, size))
+    
+    # Find logging calls in code
+    for fp, rel in iter_files(path, include_exts={".py", ".js", ".ts", ".java"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        lines = text.splitlines()
+        for i, line in enumerate(lines, 1):
+            if re.search(r'(logger|log|console)\.(debug|info|warn|error|fatal)', line.lower()):
+                log_calls.append((rel, i, line.strip()))
+    
+    out.append(f"Log files: {len(log_files)}\n")
+    out.append(f"Log calls in code: {len(log_calls)}\n\n")
+    
+    if log_files:
+        out.append(md_h2("Log Files"))
+        total_size = sum(size for _, size in log_files)
+        out.append(f"Total size: {total_size / 1024 / 1024:.2f} MB\n\n")
+        for rel, size in sorted(log_files, key=lambda x: -x[1])[:20]:
+            out.append(f"- {rel}: {size / 1024:.1f} KB\n")
+    
+    if log_calls:
+        out.append("\n")
+        out.append(md_h2("Logging Patterns (Sample)"))
+        for rel, line, code in log_calls[:30]:
+            out.append(f"- {rel}:{line} `{code[:70]}`\n")
+    
+    if not log_files and not log_calls:
+        out.append("No log files or logging calls found.\n")
+    
+    return "".join(out)
+
+
+def cmd_resource_monitor(path: str) -> str:
+    """Monitors resource usage patterns in code."""
+    out = [md_h1("Resource Usage Monitor")]
+    
+    concerns = []
+    
+    for fp, rel in iter_files(path, include_exts={".py", ".js", ".ts", ".java", ".go"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        lines = text.splitlines()
+        for i, line in enumerate(lines, 1):
+            lower = line.lower()
+            
+            # File operations without close
+            if "open(" in lower and "with " not in lower:
+                if "close()" not in "\n".join(lines[i:min(i+10, len(lines))]):
+                    concerns.append(f"{rel}:{i} File opened without context manager")
+            
+            # Large memory allocations
+            if any(x in lower for x in ["malloc(", "new byte[", "allocate("]):
+                if any(y in lower for y in ["1024 * 1024", "mb", "megabyte"]):
+                    concerns.append(f"{rel}:{i} Large memory allocation")
+            
+            # Thread/process creation
+            if any(x in lower for x in ["thread(", "process(", "executor("]):
+                concerns.append(f"{rel}:{i} Thread/process creation")
+            
+            # Network connections
+            if any(x in lower for x in ["socket(", "connect(", "requests."]):
+                if "timeout" not in "\n".join(lines[max(0,i-3):min(i+3, len(lines))]).lower():
+                    concerns.append(f"{rel}:{i} Network operation without timeout")
+    
+    if concerns:
+        out.append(md_h2("Resource Usage Concerns"))
+        for concern in concerns[:50]:
+            out.append(f"- {concern}\n")
+    else:
+        out.append("No resource usage concerns detected.\n")
+    
+    return "".join(out)
+
+
+def cmd_code_duplication_detector(path: str) -> str:
+    """Detects code duplication using simple hashing."""
+    out = [md_h1("Code Duplication Detector")]
+    
+    # Hash code blocks (functions)
+    code_hashes = defaultdict(list)
+    
+    for fp, rel in iter_files(path, include_exts={".py"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        try:
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # Get function body as text
+                    start = getattr(node, 'lineno', 0)
+                    end = getattr(node, 'end_lineno', start)
+                    if start and end:
+                        lines = text.splitlines()[start-1:end]
+                        body = "\n".join(lines)
+                        
+                        # Simple hash of normalized code
+                        normalized = re.sub(r'\s+', ' ', body).strip()
+                        if len(normalized) > 100:  # Only consider substantial functions
+                            code_hash = hash(normalized)
+                            code_hashes[code_hash].append((rel, node.name, start))
+        except Exception:
+            pass
+    
+    # Find duplicates
+    duplicates = {h: locs for h, locs in code_hashes.items() if len(locs) > 1}
+    
+    if duplicates:
+        out.append(f"Found {len(duplicates)} groups of potentially duplicated code\n\n")
+        out.append(md_h2("Duplicate Code Groups"))
+        
+        for i, (code_hash, locations) in enumerate(list(duplicates.items())[:20], 1):
+            out.append(f"\n**Group {i}** ({len(locations)} instances):\n")
+            for rel, name, line in locations:
+                out.append(f"- {rel}:{line} `{name}()`\n")
+    else:
+        out.append("No significant code duplication detected.\n")
+    
+    return "".join(out)
+
+
+def cmd_security_headers_checker(path: str) -> str:
+    """Checks for security headers in web applications."""
+    out = [md_h1("Security Headers Checker")]
+    
+    found_headers = []
+    missing_recommendations = []
+    
+    # Look for security header configurations
+    for fp, rel in iter_files(path, include_exts={".py", ".js", ".ts", ".java", ".go", ".rb"}):
+        text = read_text_safe(fp)
+        if not text:
+            continue
+        
+        lower = text.lower()
+        
+        # Check for various security headers
+        if "x-frame-options" in lower:
+            found_headers.append((rel, "X-Frame-Options"))
+        if "x-content-type-options" in lower:
+            found_headers.append((rel, "X-Content-Type-Options"))
+        if "content-security-policy" in lower or "csp" in lower:
+            found_headers.append((rel, "Content-Security-Policy"))
+        if "strict-transport-security" in lower or "hsts" in lower:
+            found_headers.append((rel, "Strict-Transport-Security"))
+        if "x-xss-protection" in lower:
+            found_headers.append((rel, "X-XSS-Protection"))
+    
+    required_headers = {
+        "X-Frame-Options",
+        "X-Content-Type-Options",
+        "Content-Security-Policy",
+        "Strict-Transport-Security"
+    }
+    
+    found_header_types = {h[1] for h in found_headers}
+    missing = required_headers - found_header_types
+    
+    if found_headers:
+        out.append(md_h2("Security Headers Found"))
+        for rel, header in found_headers:
+            out.append(f"- {header} in {rel}\n")
+        out.append("\n")
+    
+    if missing:
+        out.append(md_h2("Recommended Headers Not Found"))
+        for header in sorted(missing):
+            out.append(f"- {header}\n")
+            if header == "X-Frame-Options":
+                out.append("  Prevents clickjacking attacks\n")
+            elif header == "Content-Security-Policy":
+                out.append("  Prevents XSS and injection attacks\n")
+            elif header == "Strict-Transport-Security":
+                out.append("  Enforces HTTPS connections\n")
+    else:
+        out.append("✓ All recommended security headers found!\n")
+    
+    return "".join(out)
+
+
+# ----------------------------
 # Template generator
 # ----------------------------
 
@@ -2154,6 +2907,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     add_path_arg(sub.add_parser("xml-syntax-scan"))
     add_path_arg(sub.add_parser("html-syntax-scan"))
     add_path_arg(sub.add_parser("nocommit-scan"))
+    
+    # NEW: Production-ready utility scanners
+    add_path_arg(sub.add_parser("api-response-validator"))
+    add_path_arg(sub.add_parser("config-validator"))
+    add_path_arg(sub.add_parser("dependency-tree-analyzer"))
+    add_path_arg(sub.add_parser("git-commit-linter"))
+    add_path_arg(sub.add_parser("code-complexity-calculator"))
+    add_path_arg(sub.add_parser("performance-profiler-report"))
+    add_path_arg(sub.add_parser("test-coverage-analyzer"))
+    add_path_arg(sub.add_parser("dockerfile-analyzer"))
+    add_path_arg(sub.add_parser("env-validator"))
+    add_path_arg(sub.add_parser("api-endpoint-inventory"))
+    add_path_arg(sub.add_parser("database-schema-analyzer"))
+    add_path_arg(sub.add_parser("log-analyzer"))
+    add_path_arg(sub.add_parser("resource-monitor"))
+    add_path_arg(sub.add_parser("code-duplication-detector"))
+    add_path_arg(sub.add_parser("security-headers-checker"))
 
     # Converters/reporters
     add_path_arg(sub.add_parser("json-to-md"))
@@ -2511,6 +3281,51 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.cmd == "readme-links":
             content = cmd_readme_links(args.path)
             out = report_path("readme-links")
+        elif args.cmd == "api-response-validator":
+            content = cmd_api_response_validator(args.path)
+            out = report_path("api-response-validator")
+        elif args.cmd == "config-validator":
+            content = cmd_config_validator(args.path)
+            out = report_path("config-validator")
+        elif args.cmd == "dependency-tree-analyzer":
+            content = cmd_dependency_tree_analyzer(args.path)
+            out = report_path("dependency-tree-analyzer")
+        elif args.cmd == "git-commit-linter":
+            content = cmd_git_commit_linter(args.path)
+            out = report_path("git-commit-linter")
+        elif args.cmd == "code-complexity-calculator":
+            content = cmd_code_complexity_calculator(args.path)
+            out = report_path("code-complexity-calculator")
+        elif args.cmd == "performance-profiler-report":
+            content = cmd_performance_profiler_report(args.path)
+            out = report_path("performance-profiler-report")
+        elif args.cmd == "test-coverage-analyzer":
+            content = cmd_test_coverage_analyzer(args.path)
+            out = report_path("test-coverage-analyzer")
+        elif args.cmd == "dockerfile-analyzer":
+            content = cmd_dockerfile_analyzer(args.path)
+            out = report_path("dockerfile-analyzer")
+        elif args.cmd == "env-validator":
+            content = cmd_env_validator(args.path)
+            out = report_path("env-validator")
+        elif args.cmd == "api-endpoint-inventory":
+            content = cmd_api_endpoint_inventory(args.path)
+            out = report_path("api-endpoint-inventory")
+        elif args.cmd == "database-schema-analyzer":
+            content = cmd_database_schema_analyzer(args.path)
+            out = report_path("database-schema-analyzer")
+        elif args.cmd == "log-analyzer":
+            content = cmd_log_analyzer(args.path)
+            out = report_path("log-analyzer")
+        elif args.cmd == "resource-monitor":
+            content = cmd_resource_monitor(args.path)
+            out = report_path("resource-monitor")
+        elif args.cmd == "code-duplication-detector":
+            content = cmd_code_duplication_detector(args.path)
+            out = report_path("code-duplication-detector")
+        elif args.cmd == "security-headers-checker":
+            content = cmd_security_headers_checker(args.path)
+            out = report_path("security-headers-checker")
         elif args.cmd == "template-gen":
             content = cmd_template_gen(args.name)
             out = report_path(f"template-{args.name}")
