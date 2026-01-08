@@ -30,6 +30,8 @@ cd Script-Toolkit
 python scripts/code_stats.py  # Run any script
 ```
 
+**Note**: All scripts should be run from the repository root directory. The scripts automatically find the `llm_context` module when run from this location.
+
 ### Basic Usage
 
 **Option 1: Direct Script Execution**
